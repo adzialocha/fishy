@@ -7,9 +7,8 @@ use p2panda_rs::identity::KeyPair;
 use p2panda_rs::schema::{FieldType, SchemaDescription, SchemaFields, SchemaName};
 
 use crate::context::Context;
-use crate::lock_file::LockFile;
+use crate::files::{LockFile, SchemaFile};
 use crate::schema::Schema;
-use crate::schema_file::SchemaFile;
 
 fn write_file(path: &str, content: &str) -> Result<()> {
     let mut file = File::create(&path)?;

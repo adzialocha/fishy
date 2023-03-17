@@ -1,8 +1,7 @@
 mod commands;
 mod context;
-mod lock_file;
+mod files;
 mod schema;
-mod schema_file;
 
 use std::path::PathBuf;
 
@@ -19,7 +18,7 @@ use p2panda_rs::test_utils::memory_store::helpers::send_to_store;
 use p2panda_rs::test_utils::memory_store::MemoryStore;
 
 use context::Context;
-use lock_file::{Commit, LockFile};
+use files::{Commit, LockFile};
 
 /// A fictional versioning CLI.
 #[derive(Debug, Parser)]

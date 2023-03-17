@@ -5,8 +5,7 @@ use anyhow::{bail, Context as ErrorContext, Result};
 use p2panda_rs::identity::KeyPair;
 
 use crate::context::Context;
-use crate::lock_file::LockFile;
-use crate::schema_file::SchemaFile;
+use crate::files::{LockFile, SchemaFile};
 
 pub fn update(context: Context, private_key_path: &PathBuf) -> Result<()> {
     let schema_file_str = fs::read_to_string(&context.schema_path)?;
