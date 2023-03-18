@@ -6,9 +6,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Commit {
-    entry_hash: Hash,
-    entry: EncodedEntry,
-    operation: EncodedOperation,
+    pub entry_hash: Hash,
+    pub entry: EncodedEntry,
+    pub operation: EncodedOperation,
 }
 
 impl Commit {
@@ -23,8 +23,8 @@ impl Commit {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LockFile {
-    version: u64,
-    commits: Vec<Commit>,
+    pub version: u64,
+    pub commits: Vec<Commit>,
 }
 
 impl LockFile {

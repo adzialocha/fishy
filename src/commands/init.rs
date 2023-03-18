@@ -47,15 +47,15 @@ pub fn init(_context: Context, name: &str) -> Result<()> {
     let schema_name =
         SchemaName::new(name).with_context(|| format!("Invalid schema name: '{name}'"))?;
     let schema_description = SchemaDescription::new("")?;
-    let schema_fields = SchemaFields::new(&[("my_field", FieldType::String)])?;
-    let schema = Schema::new(&schema_name, &schema_description, &schema_fields);
+    /* let schema_fields = SchemaFields::new(&[("my_field", FieldType::String)])?;
+    let schema = Schema::new(&schema_name, &schema_description, &schema_fields); */
 
-    let mut schema_file = SchemaFile::new();
+    /* let mut schema_file = SchemaFile::new();
     schema_file.add_schema(&schema);
 
     let schema_file_str = toml::to_string_pretty(&schema_file)?;
     write_file("schema.toml", &schema_file_str)
-        .with_context(|| "Could not create schema.toml file")?;
+        .with_context(|| "Could not create schema.toml file")?; */
 
     Ok(())
 }

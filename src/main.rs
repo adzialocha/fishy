@@ -71,7 +71,7 @@ async fn main() -> Result<()> {
             init(context, &name)?;
         }
         Commands::Update { private_key_path } => {
-            update(context, &private_key_path)?;
+            update(context, &private_key_path).await?;
         }
         Commands::Publish { endpoint } => publish(context, &endpoint),
     };

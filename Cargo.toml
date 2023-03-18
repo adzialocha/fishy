@@ -7,7 +7,7 @@ edition = "2021"
 anyhow = "1.0.69"
 clap = { version = "4.1.8", features = ["derive"] }
 hex = "0.4.3"
-p2panda-rs = { version = "0.7.0", features = ["test-utils"] }
+p2panda-rs = { git = "https://github.com/p2panda/p2panda", rev = "c689922be7c93b9240e0a3f10dc4b20cfe76d280", features = ["test-utils"] }
 serde = { version = "1.0.156", features = ["derive"] }
 tokio = { version = "1.26.0", features = ["macros", "rt"] }
 toml = "0.7.3"

@@ -1,4 +1,8 @@
-use p2panda_rs::schema::{SchemaDescription, SchemaFields, SchemaName};
+use std::collections::BTreeMap;
+
+use p2panda_rs::schema::{FieldName, SchemaDescription, SchemaName};
+
+use crate::files::SchemaFields;
 
 #[derive(Debug)]
 pub struct Schema {
