@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use p2panda_rs::schema::{FieldName, SchemaDescription, SchemaId, SchemaName};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum FieldType {
     #[serde(rename = "bool")]
@@ -20,7 +20,7 @@ pub enum FieldType {
     String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum RelationType {
     Relation,

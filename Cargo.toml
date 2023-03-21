@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.69"
+async-trait = "0.1.67"
 clap = { version = "4.1.8", features = ["derive"] }
 hex = "0.4.3"
 p2panda-rs = { git = "https://github.com/p2panda/p2panda", rev = "c689922be7c93b9240e0a3f10dc4b20cfe76d280", features = ["test-utils"] }
