@@ -96,6 +96,8 @@ impl Executable for FieldPlan {
             }
         };
 
+        // @TODO: Find out if anything has changed
+
         let operation = OperationBuilder::new(&SchemaId::SchemaFieldDefinition(1))
             .action(OperationAction::Create)
             .fields(&[
@@ -198,7 +200,9 @@ async fn do_it(current: HashMap<SchemaName, p2panda_rs::schema::Schema>, context
 
     schema_b.execute(&mut executor).await.unwrap();
 
-    println!("{:?}", executor.commits);
+    for (entry, operation) in executor.commits {
+        println!("{entry}\n{operation}\n");
+    }
 }
 
 #[derive(Debug)]
