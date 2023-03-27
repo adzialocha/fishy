@@ -14,10 +14,14 @@ use p2panda_rs::identity::KeyPair;
 use p2panda_rs::operation::decode::decode_operation;
 use p2panda_rs::operation::encode::encode_operation;
 use p2panda_rs::operation::traits::Schematic;
-use p2panda_rs::operation::{EncodedOperation, Operation, OperationAction, OperationBuilder};
+use p2panda_rs::operation::{
+    EncodedOperation, Operation, OperationAction, OperationBuilder, OperationValue,
+    PinnedRelationList,
+};
 use p2panda_rs::schema::system::{SchemaFieldView, SchemaView};
 use p2panda_rs::schema::{
-    FieldName, Schema as PandaSchema, SchemaDescription, SchemaId, SchemaName,
+    FieldName, FieldType as PandaFieldType, Schema as PandaSchema, SchemaDescription, SchemaId,
+    SchemaName,
 };
 use p2panda_rs::storage_provider::traits::DocumentStore;
 use p2panda_rs::test_utils::memory_store::helpers::send_to_store;
@@ -29,13 +33,12 @@ use crate::schema::Schema;
 struct Executor {
     context: Context,
     key_pair: KeyPair,
-    current: HashMap<SchemaName, PandaSchema>,
     commits: Vec<(EncodedEntry, EncodedOperation)>,
 }
 
 impl Executor {
     pub async fn sign(&mut self, operation: &Operation, schema_id: SchemaId) -> Result<Hash> {
-        let schema = p2panda_rs::schema::Schema::get_system(schema_id)?;
+        let schema = PandaSchema::get_system(schema_id)?;
 
         let encoded_operation = encode_operation(&operation)?;
 
@@ -66,6 +69,7 @@ enum FieldTypePlan {
 #[derive(Debug, Clone, PartialEq)]
 struct FieldPlan {
     name: FieldName,
+    current: Option<SchemaFieldView>,
     field_type: FieldTypePlan,
 }
 
@@ -73,37 +77,46 @@ struct FieldPlan {
 impl Executable for FieldPlan {
     async fn execute(&self, executor: &mut Executor) -> Result<DocumentViewId> {
         let field_type = match &self.field_type {
-            FieldTypePlan::Field(FieldType::String) => p2panda_rs::schema::FieldType::String,
-            FieldTypePlan::Field(FieldType::Boolean) => p2panda_rs::schema::FieldType::Boolean,
-            FieldTypePlan::Field(FieldType::Float) => p2panda_rs::schema::FieldType::Float,
-            FieldTypePlan::Field(FieldType::Integer) => p2panda_rs::schema::FieldType::Integer,
+            FieldTypePlan::Field(FieldType::String) => PandaFieldType::String,
+            FieldTypePlan::Field(FieldType::Boolean) => PandaFieldType::Boolean,
+            FieldTypePlan::Field(FieldType::Float) => PandaFieldType::Float,
+            FieldTypePlan::Field(FieldType::Integer) => PandaFieldType::Integer,
             FieldTypePlan::Relation(relation, schema_plan) => {
                 let view_id = schema_plan.execute(executor).await?;
                 let schema_id = SchemaId::new_application(&schema_plan.name, &view_id);
 
                 match relation {
-                    RelationType::Relation => p2panda_rs::schema::FieldType::Relation(schema_id),
-                    RelationType::RelationList => {
-                        p2panda_rs::schema::FieldType::RelationList(schema_id)
-                    }
-                    RelationType::PinnedRelation => {
-                        p2panda_rs::schema::FieldType::PinnedRelation(schema_id)
-                    }
+                    RelationType::Relation => PandaFieldType::Relation(schema_id),
+                    RelationType::RelationList => PandaFieldType::RelationList(schema_id),
+                    RelationType::PinnedRelation => PandaFieldType::PinnedRelation(schema_id),
                     RelationType::PinnedRelationList => {
-                        p2panda_rs::schema::FieldType::PinnedRelationList(schema_id)
+                        PandaFieldType::PinnedRelationList(schema_id)
                     }
                 }
             }
         };
 
-        // @TODO: Find out if anything has changed
+        let mut action = OperationAction::Create;
+        let mut fields: Vec<(&str, OperationValue)> = vec![("name", self.name.clone().into())];
+
+        match &self.current {
+            Some(current) => {
+                if current.field_type() != &field_type {
+                    fields.push(("type", field_type.into()));
+                } else {
+                    return Ok(current.id().clone());
+                }
+
+                action = OperationAction::Update;
+            }
+            None => {
+                fields.push(("type", field_type.into()));
+            }
+        }
 
         let operation = OperationBuilder::new(&SchemaId::SchemaFieldDefinition(1))
-            .action(OperationAction::Create)
-            .fields(&[
-                ("name", self.name.to_owned().into()),
-                ("type", field_type.into()),
-            ])
+            .action(action)
+            .fields(fields.as_slice())
             .build()?;
 
         let entry_hash = executor
@@ -117,6 +130,7 @@ impl Executable for FieldPlan {
 #[derive(Debug, Clone, PartialEq)]
 struct SchemaPlan {
     name: SchemaName,
+    current: Option<SchemaView>,
     description: SchemaDescription,
     fields: Vec<FieldPlan>,
 }
@@ -124,20 +138,46 @@ struct SchemaPlan {
 #[async_trait]
 impl Executable for SchemaPlan {
     async fn execute(&self, executor: &mut Executor) -> Result<DocumentViewId> {
-        let mut fields: Vec<DocumentViewId> = Vec::new();
+        let mut schema_fields: Vec<DocumentViewId> = Vec::new();
 
         for field in &self.fields {
             let field_view_id = field.execute(executor).await?;
-            fields.push(field_view_id);
+            schema_fields.push(field_view_id);
+        }
+
+        let mut action = OperationAction::Create;
+        let mut fields: Vec<(&str, OperationValue)> = vec![("name", self.name.to_string().into())];
+
+        match &self.current {
+            Some(current) => {
+                let mut update = false;
+
+                if &self.description.to_string() != current.description() {
+                    fields.push(("description", self.description.to_string().into()));
+                    update = true;
+                }
+
+                let pinned_list = PinnedRelationList::new(schema_fields.clone());
+                if current.fields() == &pinned_list {
+                    fields.push(("fields", schema_fields.into()));
+                    update = true;
+                }
+
+                if update {
+                    action = OperationAction::Update;
+                } else {
+                    return Ok(current.view_id().clone())
+                }
+            }
+            None => {
+                fields.push(("description", self.description.to_string().into()));
+                fields.push(("fields", schema_fields.into()));
+            }
         }
 
         let operation = OperationBuilder::new(&SchemaId::SchemaDefinition(1))
-            .action(OperationAction::Create)
-            .fields(&[
-                ("name", self.name.to_string().into()),
-                ("description", self.description.to_string().into()),
-                ("fields", fields.into()),
-            ])
+            .action(action)
+            .fields(&fields)
             .build()?;
 
         let entry_hash = executor
@@ -148,53 +188,104 @@ impl Executable for SchemaPlan {
     }
 }
 
-async fn do_it(current: HashMap<SchemaName, p2panda_rs::schema::Schema>, context: Context) {
+async fn do_it(
+    current: HashMap<SchemaName, (PandaSchema, SchemaView, Vec<SchemaFieldView>)>,
+    _planned: Vec<Schema>,
+    context: Context,
+) {
+    let schema_name = SchemaName::new("schema_a").unwrap();
+
+    let schema_current = current
+        .get(&schema_name)
+        .and_then(|schema| Some(schema.1.clone()));
+
+    let schema_field = current
+        .get(&schema_name)
+        .and_then(|schema| schema.2.iter().find(|field| field.name() == "a").cloned());
+
     let field_a = FieldPlan {
         name: "a".into(),
+        current: schema_field,
         field_type: FieldTypePlan::Field(FieldType::String),
     };
 
+    let schema_field = current
+        .get(&schema_name)
+        .and_then(|schema| schema.2.iter().find(|field| field.name() == "b").cloned());
+
     let field_b = FieldPlan {
         name: "b".into(),
+        current: schema_field,
         field_type: FieldTypePlan::Field(FieldType::Integer),
     };
 
+    let schema_field = current
+        .get(&schema_name)
+        .and_then(|schema| schema.2.iter().find(|field| field.name() == "c").cloned());
+
     let field_c = FieldPlan {
         name: "c".into(),
+        current: schema_field,
         field_type: FieldTypePlan::Field(FieldType::Float),
     };
 
     let schema_a = SchemaPlan {
-        name: SchemaName::new("schema_a").unwrap(),
+        name: schema_name,
+        current: schema_current,
         description: SchemaDescription::new("test").unwrap(),
         fields: vec![field_a, field_b, field_c],
     };
 
+    // =====
+
+    let schema_name = SchemaName::new("schema_b").unwrap();
+
+    let schema_current = current
+        .get(&schema_name)
+        .and_then(|schema| Some(schema.1.clone()));
+
+    let schema_field = current
+        .get(&schema_name)
+        .and_then(|schema| schema.2.iter().find(|field| field.name() == "d").cloned());
+
     let field_d = FieldPlan {
         name: "d".into(),
+        current: schema_field,
         field_type: FieldTypePlan::Relation(RelationType::RelationList, schema_a),
     };
 
+    let schema_field = current
+        .get(&schema_name)
+        .and_then(|schema| schema.2.iter().find(|field| field.name() == "e").cloned());
+
     let field_e = FieldPlan {
         name: "e".into(),
+        current: schema_field,
         field_type: FieldTypePlan::Field(FieldType::Boolean),
     };
 
+    let schema_field = current
+        .get(&schema_name)
+        .and_then(|schema| schema.2.iter().find(|field| field.name() == "f").cloned());
+
     let field_f = FieldPlan {
         name: "f".into(),
+        current: schema_field,
         field_type: FieldTypePlan::Field(FieldType::Boolean),
     };
 
     let schema_b = SchemaPlan {
         name: SchemaName::new("schema_b").unwrap(),
+        current: schema_current,
         description: SchemaDescription::new("testt").unwrap(),
         fields: vec![field_d, field_e, field_f],
     };
 
+    // =====
+
     let mut executor = Executor {
         context,
         key_pair: KeyPair::new(),
-        current,
         commits: Vec::new(),
     };
 
@@ -203,13 +294,6 @@ async fn do_it(current: HashMap<SchemaName, p2panda_rs::schema::Schema>, context
     for (entry, operation) in executor.commits {
         println!("{entry}\n{operation}\n");
     }
-}
-
-#[derive(Debug)]
-struct Plan {}
-
-fn plan_build(_plan: &Schema, _previous: Option<&p2panda_rs::schema::Schema>) -> Plan {
-    Plan {}
 }
 
 pub async fn update(context: Context, private_key_path: &PathBuf) -> Result<()> {
@@ -227,8 +311,11 @@ pub async fn update(context: Context, private_key_path: &PathBuf) -> Result<()> 
     println!("{:?}", lock_file);
     println!("{}", key_pair.public_key());
 
+    // GET THE PLANNED SCHEMAS
+
     let mut planned_schemas: Vec<Schema> = Vec::new();
-    let mut built_schemas: HashMap<SchemaName, p2panda_rs::schema::Schema> = HashMap::new();
+    let mut built_schemas: HashMap<SchemaName, (PandaSchema, SchemaView, Vec<SchemaFieldView>)> =
+        HashMap::new();
 
     for (schema_name, schema_item) in schema_file.iter() {
         let schema = Schema::new(schema_name, &schema_item.description, &schema_item.fields);
@@ -240,17 +327,19 @@ pub async fn update(context: Context, private_key_path: &PathBuf) -> Result<()> 
         planned_schemas.push(schema);
     }
 
+    // GET THE CURRENT SCHEMAS
+
     for commit in lock_file.commits {
         let plain_operation = decode_operation(&commit.operation)?;
 
         let schema = match plain_operation.schema_id() {
-            SchemaId::SchemaDefinition(version) => p2panda_rs::schema::Schema::get_system(
+            SchemaId::SchemaDefinition(version) => PandaSchema::get_system(
                 SchemaId::SchemaDefinition(*version),
             )
             .with_context(|| {
                 "Incompatible system schema definition version {version} used in schema.lock"
             })?,
-            SchemaId::SchemaFieldDefinition(version) => p2panda_rs::schema::Schema::get_system(
+            SchemaId::SchemaFieldDefinition(version) => PandaSchema::get_system(
                 SchemaId::SchemaFieldDefinition(*version),
             )
             .with_context(|| {
@@ -294,20 +383,20 @@ pub async fn update(context: Context, private_key_path: &PathBuf) -> Result<()> 
         }
 
         let schema =
-            p2panda_rs::schema::Schema::from_views(schema_view, schema_field_views).unwrap();
+            PandaSchema::from_views(schema_view.clone(), schema_field_views.clone()).unwrap();
 
-        if built_schemas.insert(schema.id().name(), schema).is_some() {
+        if built_schemas
+            .insert(
+                schema.id().name(),
+                (schema, schema_view, schema_field_views),
+            )
+            .is_some()
+        {
             bail!("Duplicate schema name detected in schema.lock");
         }
     }
 
-    for planned_schema in &planned_schemas {
-        let built_schema = built_schemas.get(planned_schema.name());
-        let plan = plan_build(&planned_schema, built_schema);
-        println!("{:?}", plan);
-    }
-
-    do_it(built_schemas, context).await;
+    do_it(built_schemas, planned_schemas, context).await;
 
     // 1. Parse schema.toml, validate it
     // 2. Parse schema.lock, validate it
