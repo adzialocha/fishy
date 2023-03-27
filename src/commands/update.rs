@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, File};
+use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Context as ErrorContext, Result};
@@ -8,15 +9,13 @@ use p2panda_rs::api::publish;
 use p2panda_rs::document::traits::AsDocument;
 use p2panda_rs::document::DocumentViewId;
 use p2panda_rs::entry::traits::AsEncodedEntry;
-use p2panda_rs::entry::EncodedEntry;
 use p2panda_rs::hash::Hash;
 use p2panda_rs::identity::KeyPair;
 use p2panda_rs::operation::decode::decode_operation;
 use p2panda_rs::operation::encode::encode_operation;
 use p2panda_rs::operation::traits::Schematic;
 use p2panda_rs::operation::{
-    EncodedOperation, Operation, OperationAction, OperationBuilder, OperationValue,
-    PinnedRelationList,
+    Operation, OperationAction, OperationBuilder, OperationValue, PinnedRelationList,
 };
 use p2panda_rs::schema::system::{SchemaFieldView, SchemaView};
 use p2panda_rs::schema::{
@@ -27,13 +26,19 @@ use p2panda_rs::storage_provider::traits::DocumentStore;
 use p2panda_rs::test_utils::memory_store::helpers::send_to_store;
 
 use crate::context::Context;
-use crate::files::{FieldType, LockFile, RelationType, SchemaFile};
+use crate::files::{Commit, FieldType, LockFile, RelationType, SchemaFile};
 use crate::schema::Schema;
+
+fn write_file(path: &str, content: &str) -> Result<()> {
+    let mut file = File::create(&path)?;
+    file.write_all(content.as_bytes())?;
+    Ok(())
+}
 
 struct Executor {
     context: Context,
     key_pair: KeyPair,
-    commits: Vec<(EncodedEntry, EncodedOperation)>,
+    commits: Vec<Commit>,
 }
 
 impl Executor {
@@ -49,7 +54,8 @@ impl Executor {
 
         let entry_hash = encoded_entry.hash();
 
-        self.commits.push((encoded_entry, encoded_operation));
+        self.commits
+            .push(Commit::new(&encoded_entry, &encoded_operation));
 
         Ok(entry_hash)
     }
@@ -96,34 +102,43 @@ impl Executable for FieldPlan {
             }
         };
 
-        let mut action = OperationAction::Create;
-        let mut fields: Vec<(&str, OperationValue)> = vec![("name", self.name.clone().into())];
-
-        match &self.current {
+        let operation: Option<Operation> = match &self.current {
             Some(current) => {
                 if current.field_type() != &field_type {
-                    fields.push(("type", field_type.into()));
-                } else {
-                    return Ok(current.id().clone());
-                }
+                    let operation = OperationBuilder::new(&SchemaId::SchemaFieldDefinition(1))
+                        .action(OperationAction::Update)
+                        .previous(current.id())
+                        .fields(&[("type", field_type.clone().into())])
+                        .build()?;
 
-                action = OperationAction::Update;
+                    Some(operation)
+                } else {
+                    None
+                }
             }
             None => {
-                fields.push(("type", field_type.into()));
+                let operation = OperationBuilder::new(&SchemaId::SchemaFieldDefinition(1))
+                    .action(OperationAction::Create)
+                    .fields(&[
+                        ("name", self.name.clone().into()),
+                        ("type", field_type.into()),
+                    ])
+                    .build()?;
+
+                Some(operation)
             }
+        };
+
+        match operation {
+            Some(operation) => {
+                let entry_hash = executor
+                    .sign(&operation, SchemaId::SchemaFieldDefinition(1))
+                    .await?;
+
+                Ok(entry_hash.into())
+            }
+            None => Ok(self.current.as_ref().unwrap().id().to_owned().into()),
         }
-
-        let operation = OperationBuilder::new(&SchemaId::SchemaFieldDefinition(1))
-            .action(action)
-            .fields(fields.as_slice())
-            .build()?;
-
-        let entry_hash = executor
-            .sign(&operation, SchemaId::SchemaFieldDefinition(1))
-            .await?;
-
-        Ok(entry_hash.into())
     }
 }
 
@@ -145,10 +160,9 @@ impl Executable for SchemaPlan {
             schema_fields.push(field_view_id);
         }
 
-        let mut action = OperationAction::Create;
         let mut fields: Vec<(&str, OperationValue)> = vec![("name", self.name.to_string().into())];
 
-        match &self.current {
+        let operation: Option<Operation> = match &self.current {
             Some(current) => {
                 let mut update = false;
 
@@ -158,33 +172,46 @@ impl Executable for SchemaPlan {
                 }
 
                 let pinned_list = PinnedRelationList::new(schema_fields.clone());
-                if current.fields() == &pinned_list {
-                    fields.push(("fields", schema_fields.into()));
+                if current.fields() != &pinned_list {
+                    fields.push(("fields", schema_fields.clone().into()));
                     update = true;
                 }
 
                 if update {
-                    action = OperationAction::Update;
+                    let operation = OperationBuilder::new(&SchemaId::SchemaDefinition(1))
+                        .previous(current.view_id())
+                        .action(OperationAction::Update)
+                        .fields(&fields)
+                        .build()?;
+
+                    Some(operation)
                 } else {
-                    return Ok(current.view_id().clone())
+                    None
                 }
             }
             None => {
                 fields.push(("description", self.description.to_string().into()));
                 fields.push(("fields", schema_fields.into()));
+
+                let operation = OperationBuilder::new(&SchemaId::SchemaDefinition(1))
+                    .action(OperationAction::Create)
+                    .fields(&fields)
+                    .build()?;
+
+                Some(operation)
             }
+        };
+
+        match operation {
+            Some(operation) => {
+                let entry_hash = executor
+                    .sign(&operation, SchemaId::SchemaDefinition(1))
+                    .await?;
+
+                Ok(entry_hash.into())
+            }
+            None => Ok(self.current.as_ref().unwrap().view_id().clone().into()),
         }
-
-        let operation = OperationBuilder::new(&SchemaId::SchemaDefinition(1))
-            .action(action)
-            .fields(&fields)
-            .build()?;
-
-        let entry_hash = executor
-            .sign(&operation, SchemaId::SchemaDefinition(1))
-            .await?;
-
-        Ok(entry_hash.into())
     }
 }
 
@@ -192,7 +219,7 @@ async fn do_it(
     current: HashMap<SchemaName, (PandaSchema, SchemaView, Vec<SchemaFieldView>)>,
     _planned: Vec<Schema>,
     context: Context,
-) {
+) -> Result<Vec<Commit>> {
     let schema_name = SchemaName::new("schema_a").unwrap();
 
     let schema_current = current
@@ -289,11 +316,9 @@ async fn do_it(
         commits: Vec::new(),
     };
 
-    schema_b.execute(&mut executor).await.unwrap();
+    schema_b.execute(&mut executor).await?;
 
-    for (entry, operation) in executor.commits {
-        println!("{entry}\n{operation}\n");
-    }
+    return Ok(executor.commits);
 }
 
 pub async fn update(context: Context, private_key_path: &PathBuf) -> Result<()> {
@@ -301,14 +326,18 @@ pub async fn update(context: Context, private_key_path: &PathBuf) -> Result<()> 
     let schema_file: SchemaFile =
         toml::from_str(&schema_file_str).with_context(|| "Invalid schema.toml format")?;
 
-    let lock_file_str = fs::read_to_string(&context.lock_path)?;
-    let lock_file: LockFile = toml::from_str(&lock_file_str)?;
+    let lock_file_str = fs::read_to_string(&context.lock_path);
+    let mut lock_file = match lock_file_str {
+        Ok(file_str) => {
+            let lock_file: LockFile = toml::from_str(&file_str)?;
+            lock_file
+        }
+        Err(_) => LockFile::new(vec![]),
+    };
 
     let private_key_file_str = fs::read_to_string(&private_key_path)?;
     let key_pair = KeyPair::from_private_key_str(&private_key_file_str)?;
 
-    println!("{:?}", schema_file);
-    println!("{:?}", lock_file);
     println!("{}", key_pair.public_key());
 
     // GET THE PLANNED SCHEMAS
@@ -329,10 +358,11 @@ pub async fn update(context: Context, private_key_path: &PathBuf) -> Result<()> 
 
     // GET THE CURRENT SCHEMAS
 
-    for commit in lock_file.commits {
-        let plain_operation = decode_operation(&commit.operation)?;
+    if let Some(commits) = &lock_file.commits {
+        for commit in commits {
+            let plain_operation = decode_operation(&commit.operation)?;
 
-        let schema = match plain_operation.schema_id() {
+            let schema = match plain_operation.schema_id() {
             SchemaId::SchemaDefinition(version) => PandaSchema::get_system(
                 SchemaId::SchemaDefinition(*version),
             )
@@ -348,55 +378,81 @@ pub async fn update(context: Context, private_key_path: &PathBuf) -> Result<()> 
             value => bail!("Invalid schema id '{value}' detected in schema.lock"),
         };
 
-        publish(
-            &context.store,
-            schema,
-            &commit.entry,
-            &plain_operation,
-            &commit.operation,
-        )
-        .await?;
-    }
-
-    let definition_documents = context
-        .store
-        .get_documents_by_schema(&SchemaId::SchemaDefinition(1))
-        .await?;
-
-    for definition_document in definition_documents {
-        let document_view = definition_document.view().unwrap();
-        let schema_view = SchemaView::try_from(document_view).unwrap();
-        let mut schema_field_views: Vec<SchemaFieldView> = Vec::new();
-
-        for field_view_id in schema_view.fields().iter() {
-            let field_document = context
-                .store
-                .get_document_by_view_id(field_view_id)
-                .await
-                .unwrap()
-                .unwrap();
-
-            let schema_field_view =
-                SchemaFieldView::try_from(field_document.view().unwrap()).unwrap();
-
-            schema_field_views.push(schema_field_view);
-        }
-
-        let schema =
-            PandaSchema::from_views(schema_view.clone(), schema_field_views.clone()).unwrap();
-
-        if built_schemas
-            .insert(
-                schema.id().name(),
-                (schema, schema_view, schema_field_views),
+            publish(
+                &context.store,
+                schema,
+                &commit.entry,
+                &plain_operation,
+                &commit.operation,
             )
-            .is_some()
-        {
-            bail!("Duplicate schema name detected in schema.lock");
+            .await?;
+        }
+
+        let definition_documents = context
+            .store
+            .get_documents_by_schema(&SchemaId::SchemaDefinition(1))
+            .await?;
+
+        for definition_document in definition_documents {
+            let document_view = definition_document.view().unwrap();
+            let schema_view = SchemaView::try_from(document_view).unwrap();
+            let mut schema_field_views: Vec<SchemaFieldView> = Vec::new();
+
+            for field_view_id in schema_view.fields().iter() {
+                let field_document = context
+                    .store
+                    .get_document_by_view_id(field_view_id)
+                    .await
+                    .unwrap()
+                    .unwrap();
+
+                let schema_field_view =
+                    SchemaFieldView::try_from(field_document.view().unwrap()).unwrap();
+
+                schema_field_views.push(schema_field_view);
+            }
+
+            let schema =
+                PandaSchema::from_views(schema_view.clone(), schema_field_views.clone()).unwrap();
+
+            if built_schemas
+                .insert(
+                    schema.id().name(),
+                    (schema, schema_view, schema_field_views),
+                )
+                .is_some()
+            {
+                bail!("Duplicate schema name detected in schema.lock");
+            }
         }
     }
 
-    do_it(built_schemas, planned_schemas, context).await;
+    // DO IT
+
+    let mut new_commits = do_it(built_schemas, planned_schemas, context).await?;
+    println!("Writing {} new commits", new_commits.len());
+
+    // TODO: ASK IF WE'RE OKAY W. THAT
+
+    let mut commits: Vec<Commit> = Vec::new();
+
+    if let Some(current_commits) = lock_file.commits.as_mut() {
+        commits.append(current_commits);
+    }
+    commits.append(&mut new_commits);
+
+    // WRITE TO .LOCK FILE
+
+    let lock_file = LockFile::new(commits);
+
+    let lock_file_str = format!(
+        "{}\n\n{}",
+        "# This file is automatically generated by fishy.\n# It is not intended for manual editing.",
+        toml::to_string_pretty(&lock_file)?
+    );
+
+    write_file("schema.lock", &lock_file_str)
+        .with_context(|| "Could not create schema.lock file")?;
 
     // 1. Parse schema.toml, validate it
     // 2. Parse schema.lock, validate it

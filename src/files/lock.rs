@@ -24,14 +24,14 @@ impl Commit {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LockFile {
     pub version: u64,
-    pub commits: Vec<Commit>,
+    pub commits: Option<Vec<Commit>>,
 }
 
 impl LockFile {
     pub fn new(commits: Vec<Commit>) -> Self {
         Self {
             version: 1,
-            commits,
+            commits: Some(commits),
         }
     }
 }
