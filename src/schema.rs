@@ -4,7 +4,7 @@ use p2panda_rs::schema::{FieldName, SchemaDescription, SchemaName};
 
 use crate::files::SchemaFields;
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Schema {
     name: SchemaName,
     description: SchemaDescription,

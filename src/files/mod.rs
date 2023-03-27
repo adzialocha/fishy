@@ -3,5 +3,7 @@ mod schema;
 mod secret;
 
 pub use lock::{Commit, LockFile};
-pub use schema::{FieldType, RelationType, SchemaField, SchemaFile, SchemaItem, SchemaFields};
+pub use schema::{
+    FieldType, RelationId, RelationType, SchemaField, SchemaFields, SchemaFile, SchemaItem,
+};
 pub use secret::SecretFile;

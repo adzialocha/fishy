@@ -29,31 +29,31 @@ pub enum RelationType {
     PinnedRelationList,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase", deny_unknown_fields)]
 pub enum RelationId {
     Name(SchemaName),
     Id(SchemaId),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase", deny_unknown_fields)]
 pub enum RelationSource {
     Git(String),
     Path(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RelationSchema {
     #[serde(flatten)]
-    id: RelationId,
+    pub id: RelationId,
 
     #[serde(flatten)]
-    external: Option<RelationSource>,
+    pub external: Option<RelationSource>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum SchemaField {
     Field {
@@ -67,7 +67,7 @@ pub enum SchemaField {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SchemaFields(BTreeMap<FieldName, SchemaField>);
 
 impl SchemaFields {
@@ -81,6 +81,10 @@ impl SchemaFields {
 
     pub fn insert(&mut self, field_name: FieldName, field: SchemaField) {
         self.0.insert(field_name, field);
+    }
+
+    pub fn iter(&self) -> Iter<FieldName, SchemaField> {
+        self.0.iter()
     }
 }
 

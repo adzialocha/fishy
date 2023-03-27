@@ -9,6 +9,7 @@ use p2panda_rs::api::publish;
 use p2panda_rs::document::traits::AsDocument;
 use p2panda_rs::document::DocumentViewId;
 use p2panda_rs::entry::traits::AsEncodedEntry;
+use p2panda_rs::graph::Graph;
 use p2panda_rs::hash::Hash;
 use p2panda_rs::identity::KeyPair;
 use p2panda_rs::operation::decode::decode_operation;
@@ -217,98 +218,112 @@ impl Executable for SchemaPlan {
 
 async fn do_it(
     current: HashMap<SchemaName, (PandaSchema, SchemaView, Vec<SchemaFieldView>)>,
-    _planned: Vec<Schema>,
+    planned: Vec<Schema>,
     context: Context,
 ) -> Result<Vec<Commit>> {
-    let schema_name = SchemaName::new("schema_a").unwrap();
+    let mut graph = Graph::new();
 
-    let schema_current = current
-        .get(&schema_name)
-        .and_then(|schema| Some(schema.1.clone()));
+    for schema in &planned {
+        graph.add_node(schema.name(), schema.clone());
+    }
 
-    let schema_field = current
-        .get(&schema_name)
-        .and_then(|schema| schema.2.iter().find(|field| field.name() == "a").cloned());
+    for planned_schema in &planned {
+        for field in planned_schema.fields().iter() {
+            match field.1 {
+                crate::files::SchemaField::Relation {
+                    field_type: _,
+                    schema,
+                } => {
+                    match &schema.id {
+                        crate::files::RelationId::Name(linked_schema) => {
+                            graph.add_link(linked_schema, planned_schema.name());
+                        }
+                        crate::files::RelationId::Id(_) => {
+                            todo!("Not supported yet")
+                        }
+                    };
+                }
+                _ => (),
+            }
+        }
+    }
 
-    let field_a = FieldPlan {
-        name: "a".into(),
-        current: schema_field,
-        field_type: FieldTypePlan::Field(FieldType::String),
-    };
+    let sorted_schemas = graph.sort()?;
 
-    let schema_field = current
-        .get(&schema_name)
-        .and_then(|schema| schema.2.iter().find(|field| field.name() == "b").cloned());
+    let get_current_field =
+        |current_schema: &Option<(PandaSchema, SchemaView, Vec<SchemaFieldView>)>,
+         planned_field_name: &str|
+         -> Option<SchemaFieldView> {
+            if let Some((_, _, current_field_views)) = current_schema {
+                current_field_views
+                    .iter()
+                    .find(|current_field_view| current_field_view.name() == planned_field_name)
+                    .cloned()
+            } else {
+                None
+            }
+        };
 
-    let field_b = FieldPlan {
-        name: "b".into(),
-        current: schema_field,
-        field_type: FieldTypePlan::Field(FieldType::Integer),
-    };
+    let get_planned_schema =
+        |planned_schemas: &Vec<SchemaPlan>, planned_relation: &SchemaName| -> SchemaPlan {
+            let result = planned_schemas
+                .iter()
+                .find(|schema| &schema.name == planned_relation);
 
-    let schema_field = current
-        .get(&schema_name)
-        .and_then(|schema| schema.2.iter().find(|field| field.name() == "c").cloned());
+            match result {
+                Some(schema_plan) => schema_plan.clone(),
+                None => {
+                    panic!("This should never go wrong")
+                }
+            }
+        };
 
-    let field_c = FieldPlan {
-        name: "c".into(),
-        current: schema_field,
-        field_type: FieldTypePlan::Field(FieldType::Float),
-    };
+    let mut planned_schemas: Vec<SchemaPlan> = Vec::new();
 
-    let schema_a = SchemaPlan {
-        name: schema_name,
-        current: schema_current,
-        description: SchemaDescription::new("test").unwrap(),
-        fields: vec![field_a, field_b, field_c],
-    };
+    for planned_schema in sorted_schemas.sorted() {
+        let schema_current = current
+            .get(&planned_schema.name())
+            .and_then(|schema| Some(schema.clone()));
 
-    // =====
+        let mut planned_fields: Vec<FieldPlan> = Vec::new();
 
-    let schema_name = SchemaName::new("schema_b").unwrap();
+        for (planned_field_name, planned_field_type) in planned_schema.fields().iter() {
+            let field_type = match planned_field_type {
+                crate::files::SchemaField::Field { field_type } => {
+                    FieldTypePlan::Field(field_type.clone())
+                }
+                crate::files::SchemaField::Relation { field_type, schema } => match &schema.id {
+                    crate::files::RelationId::Name(related_schema_name) => {
+                        let planned_schema =
+                            get_planned_schema(&planned_schemas, related_schema_name);
+                        FieldTypePlan::Relation(field_type.clone(), planned_schema)
+                    }
+                    crate::files::RelationId::Id(_) => todo!(),
+                },
+            };
 
-    let schema_current = current
-        .get(&schema_name)
-        .and_then(|schema| Some(schema.1.clone()));
+            let current_schema_field = get_current_field(&schema_current, planned_field_name);
 
-    let schema_field = current
-        .get(&schema_name)
-        .and_then(|schema| schema.2.iter().find(|field| field.name() == "d").cloned());
+            let field_plan = FieldPlan {
+                name: planned_field_name.to_owned(),
+                current: current_schema_field,
+                field_type,
+            };
 
-    let field_d = FieldPlan {
-        name: "d".into(),
-        current: schema_field,
-        field_type: FieldTypePlan::Relation(RelationType::RelationList, schema_a),
-    };
+            planned_fields.push(field_plan);
+        }
 
-    let schema_field = current
-        .get(&schema_name)
-        .and_then(|schema| schema.2.iter().find(|field| field.name() == "e").cloned());
+        let current_schema = schema_current.map(|current| current.1);
 
-    let field_e = FieldPlan {
-        name: "e".into(),
-        current: schema_field,
-        field_type: FieldTypePlan::Field(FieldType::Boolean),
-    };
+        let schema_plan = SchemaPlan {
+            name: planned_schema.name().clone(),
+            current: current_schema,
+            description: planned_schema.description().clone(),
+            fields: planned_fields,
+        };
 
-    let schema_field = current
-        .get(&schema_name)
-        .and_then(|schema| schema.2.iter().find(|field| field.name() == "f").cloned());
-
-    let field_f = FieldPlan {
-        name: "f".into(),
-        current: schema_field,
-        field_type: FieldTypePlan::Field(FieldType::Boolean),
-    };
-
-    let schema_b = SchemaPlan {
-        name: SchemaName::new("schema_b").unwrap(),
-        current: schema_current,
-        description: SchemaDescription::new("testt").unwrap(),
-        fields: vec![field_d, field_e, field_f],
-    };
-
-    // =====
+        planned_schemas.push(schema_plan);
+    }
 
     let mut executor = Executor {
         context,
@@ -316,7 +331,8 @@ async fn do_it(
         commits: Vec::new(),
     };
 
-    schema_b.execute(&mut executor).await?;
+    let first_schema = planned_schemas.pop().unwrap();
+    first_schema.execute(&mut executor).await?;
 
     return Ok(executor.commits);
 }
