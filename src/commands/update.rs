@@ -470,31 +470,5 @@ pub async fn update(context: Context, private_key_path: &PathBuf) -> Result<()> 
     write_file("schema.lock", &lock_file_str)
         .with_context(|| "Could not create schema.lock file")?;
 
-    // 1. Parse schema.toml, validate it
-    // 2. Parse schema.lock, validate it
-    // 3. Load data from schema.lock and materialize it, validate it (log integrity)
-    // 4. Go through every schema item defined in it and create a `Schema` instance from it, add it
-    //    to a global schema array
-    // 5. If schema is external, make sure that materialized data matches
-    //    a) If "name" was specified we're done by just comparing the schema.toml with schema
-    //    instance
-    //    b) If "id" was specified, check if view id exists
-    // 6. Go through every relation in schema and resolve dependencies
-    //    a) If dependency already exists (is in the schema array) all good
-    //    b) If dependency is external, download via git into dependencies folder or load it from
-    //       local folder
-    //    c) Repeat steps 1 - 3 for this schema relation
-
-    // @TODO
-    // Parse schema from schema.toml, validate it
-    // Parse entries + operations from schema.lock, validate them
-    // .. Store them in storage provider
-    // .. Materialize a Schema Document from them, validate it
-    // Compare schema from .toml w. materialized document
-    // .. show diff to user
-    // Generate operations for each diff
-    // Ask user to confirm it
-    // Sign operations and store them in schema.lock
-
     Ok(())
 }

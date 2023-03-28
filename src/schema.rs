@@ -1,6 +1,4 @@
-use std::collections::BTreeMap;
-
-use p2panda_rs::schema::{FieldName, SchemaDescription, SchemaName};
+use p2panda_rs::schema::{SchemaDescription, SchemaName};
 
 use crate::files::SchemaFields;
 

@@ -107,6 +107,21 @@ impl SchemaFile {
     pub fn iter(&self) -> Iter<SchemaName, SchemaItem> {
         self.0.iter()
     }
+
+    pub fn add_schema(
+        &mut self,
+        name: &SchemaName,
+        description: &SchemaDescription,
+        fields: &SchemaFields,
+    ) {
+        self.0.insert(
+            name.clone(),
+            SchemaItem {
+                description: description.to_owned(),
+                fields: fields.to_owned(),
+            },
+        );
+    }
 }
 
 #[cfg(test)]
