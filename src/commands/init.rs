@@ -52,7 +52,7 @@ pub fn init(_context: Context, name: &str) -> Result<()> {
     write_file("schema.toml", &schema_file_str)
         .with_context(|| "Could not create schema.toml file")?;
 
-    println!("Generated and stored private key in secret.txt and template schema.toml file")
+    println!("Generated and stored private key in secret.txt and template schema.toml file");
 
     Ok(())
 }
